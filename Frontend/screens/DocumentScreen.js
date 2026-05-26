@@ -39,9 +39,9 @@ const uriToBlob = async (uri) => {
 };
 
 // ------------------------------------------------------------
-// Capture Options
+// Capture Options (now with optional cancel button)
 // ------------------------------------------------------------
-function CaptureOptions({ side, onCamera, onGallery, colors }) {
+function CaptureOptions({ side, onCamera, onGallery, onCancel, colors }) {
   return (
     <View style={styles.centerContainer}>
       <Text style={[styles.title, { color: colors.text }]}>
@@ -65,6 +65,19 @@ function CaptureOptions({ side, onCamera, onGallery, colors }) {
           Choose From Gallery
         </Text>
       </TouchableOpacity>
+
+      {/* Cancel button – shown only during retake */}
+      {onCancel && (
+        <>
+          <View style={{ height: 16 }} />
+          <TouchableOpacity
+            style={[styles.primaryButton, { backgroundColor: colors.error || '#aaa', width: '100%' }]}
+            onPress={onCancel}
+          >
+            <Text style={styles.primaryButtonText}>Cancel & Back to Preview</Text>
+          </TouchableOpacity>
+        </>
+      )}
     </View>
   );
 }
@@ -104,31 +117,6 @@ function NativeCamera({ facing, overlayType, onCapture, onCancel, colors }) {
   const cameraRef = useRef(null);
   const [isReady, setIsReady] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
-  const [cameraError, setCameraError] = useState(false);
-  const timeoutRef = useRef(null);
-
-  useEffect(() => {
-    return () => {
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isReady && !cameraError) {
-      timeoutRef.current = setTimeout(() => {
-        console.warn('Camera initialization timeout');
-        setCameraError(true);
-      }, 6000);
-    }
-    return () => {
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    };
-  }, [isReady, cameraError]);
-
-  const handleCameraError = (error) => {
-    console.error('Camera error:', error);
-    setCameraError(true);
-  };
 
   const handleCapture = async () => {
     if (!cameraRef.current || !isReady || isCapturing) return;
@@ -146,23 +134,6 @@ function NativeCamera({ facing, overlayType, onCapture, onCancel, colors }) {
     }
   };
 
-  if (cameraError) {
-    return (
-      <View style={styles.centerContainer}>
-        <Text style={{ color: colors.error || '#f44336', textAlign: 'center', marginBottom: 20 }}>
-          Failed to start {facing === 'front' ? 'front' : 'back'} camera.
-          {'\n'}Please check permissions and try again.
-        </Text>
-        <TouchableOpacity
-          style={[styles.primaryButton, { backgroundColor: colors.primary }]}
-          onPress={onCancel}
-        >
-          <Text style={styles.primaryButtonText}>Go Back & Retry</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
   return (
     <View style={styles.cameraContainer}>
       <View style={StyleSheet.absoluteFill}>
@@ -171,11 +142,8 @@ function NativeCamera({ facing, overlayType, onCapture, onCancel, colors }) {
           style={styles.camera}
           facing={facing}
           active={true}
-          onCameraReady={() => {
-            if (timeoutRef.current) clearTimeout(timeoutRef.current);
-            setIsReady(true);
-          }}
-          onError={handleCameraError}
+          onCameraReady={() => setIsReady(true)}
+          onError={(error) => console.error('Camera error:', error)}
         />
       </View>
       {!isReady && (
@@ -203,7 +171,6 @@ function NativeCamera({ facing, overlayType, onCapture, onCancel, colors }) {
     </View>
   );
 }
-
 // ------------------------------------------------------------
 // Web Camera
 // ------------------------------------------------------------
@@ -387,6 +354,12 @@ export default function DocumentScreen() {
     setStep('preview');
   };
 
+  // Helper for starting document retake (shows CaptureOptions)
+  const startDocumentRetake = (side) => {
+    setIsRetake(true);
+    setStep(side); // 'front' or 'back'
+  };
+
   // ------------------------------------------------------------
   // Submission
   // ------------------------------------------------------------
@@ -515,6 +488,7 @@ export default function DocumentScreen() {
               colors={colors}
               onCamera={() => goToCameraStep('frontCamera')}
               onGallery={() => pickFromGallery('front')}
+              onCancel={isRetake ? () => setStep('preview') : undefined}
             />
           )}
 
@@ -524,6 +498,7 @@ export default function DocumentScreen() {
               colors={colors}
               onCamera={() => goToCameraStep('backCamera')}
               onGallery={() => pickFromGallery('back')}
+              onCancel={isRetake ? () => setStep('preview') : undefined}
             />
           )}
 
@@ -567,9 +542,8 @@ export default function DocumentScreen() {
               backPhoto={backPhoto}
               selfiePhoto={selfiePhoto}
               onRetake={(type) => {
-                setIsRetake(true);
-                if (type === 'front') goToCameraStep('frontCamera');
-                else if (type === 'back') goToCameraStep('backCamera');
+                if (type === 'front') startDocumentRetake('front');
+                else if (type === 'back') startDocumentRetake('back');
                 else if (type === 'selfie') goToCameraStep('selfie');
               }}
               onSubmit={submitVerification}
