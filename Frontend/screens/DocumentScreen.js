@@ -25,18 +25,6 @@ import OverlayFrame from '../components/kyc/OverlayFrame';
 import { colors as themeColors } from '../theme/colors';
 import styles from '../styles/kycStyles';
 
-// ------------------------------------------------------------
-// Helper: Convert image URI to Blob/File
-// ------------------------------------------------------------
-const uriToBlob = async (uri) => {
-  if (Platform.OS === 'web' && uri.startsWith('data:')) {
-    const res = await fetch(uri);
-    return await res.blob();
-  } else {
-    const response = await fetch(uri);
-    return await response.blob();
-  }
-};
 
 // ------------------------------------------------------------
 // Capture Options (now with optional cancel button)
@@ -117,7 +105,6 @@ function NativeCamera({ facing, overlayType, onCapture, onCancel, colors }) {
   const cameraRef = useRef(null);
   const [isReady, setIsReady] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
-
   const handleCapture = async () => {
     if (!cameraRef.current || !isReady || isCapturing) return;
     setIsCapturing(true);
@@ -290,7 +277,18 @@ export default function DocumentScreen() {
   const [modalVisible, setModalVisible] = useState(false);
 
   const [permission, requestPermission] = useCameraPermissions();
-
+  //quality check
+  const [qualityResults, setQualityResults] = useState({
+    front: null,
+    back: null,
+    selfie: null,
+  });
+  const [checkingQuality, setCheckingQuality] = useState(false);
+  const [qualityErrors, setQualityErrors] = useState({
+    front: '',
+    back: '',
+    selfie: '',
+  });
   useEffect(() => {
     if (step === 'preview') {
       setIsRetake(false);
@@ -359,66 +357,173 @@ export default function DocumentScreen() {
     setIsRetake(true);
     setStep(side); // 'front' or 'back'
   };
+  // ------------------------------------------------------------
+  // QUALITY CHECK
+  // ------------------------------------------------------------
+  const resetQualityErrors = () => {
+    setQualityErrors({
+      front: '',
+      back: '',
+      selfie: '',
+    });
+  };
+  //main fucntion
+  const checkImageQuality = async () => {
+    // always reset previous errors first
+    resetQualityErrors();
+
+    // validate missing images
+    const errors = {
+      front: frontPhoto ? '' : 'Front ID missing',
+      back: backPhoto ? '' : 'Back ID missing',
+      selfie: selfiePhoto ? '' : 'Selfie missing',
+    };
+
+    const hasMissing = Object.values(errors).some(msg => msg !== '');
+
+    if (hasMissing) {
+      setQualityErrors(errors);
+      return;
+    }
+
+    setCheckingQuality(true);
+
+    try {
+      const formData = new FormData();
+
+      formData.append('frontId', {
+        uri: frontPhoto.uri,
+        name: 'front.jpg',
+        type: 'image/jpeg',
+      });
+
+      formData.append('backId', {
+        uri: backPhoto.uri,
+        name: 'back.jpg',
+        type: 'image/jpeg',
+      });
+
+      formData.append('selfie', {
+        uri: selfiePhoto.uri,
+        name: 'selfie.jpg',
+        type: 'image/jpeg',
+      });
+
+      const response = await fetch(
+        'http://192.168.1.5:8000/api/check-quality/',//error-backennd-sender
+        {
+          method: 'POST',
+          body: formData,
+        }
+      );
+
+      const data = await response.json();
+
+      console.log('QUALITY CHECK:', data);
+
+      setQualityResults(data);
+
+      // map backend response safely
+      setQualityErrors({
+        front: data?.front?.message || '',
+        back: data?.back?.message || '',
+        selfie: data?.selfie?.message || '',
+      });
+
+    } catch (error) {
+      console.error(error);
+
+      Alert.alert(
+        'Error',
+        'Could not check image quality.'
+      );
+    } finally {
+      setCheckingQuality(false);
+    }
+  };
 
   // ------------------------------------------------------------
   // Submission
   // ------------------------------------------------------------
+
   const submitVerification = async () => {
     if (!frontPhoto || !backPhoto || !selfiePhoto) {
-      Alert.alert('Missing images', 'Please capture all required images first.');
+      Alert.alert(
+        'Missing images',
+        'Please capture all required images first.'
+      );
       return;
     }
 
     setSubmitStatus('loading');
     setErrorMessage('');
 
-    const formData = new FormData();
-
     try {
-      const frontBlob = await uriToBlob(frontPhoto.uri);
-      const backBlob = await uriToBlob(backPhoto.uri);
-      const selfieBlob = await uriToBlob(selfiePhoto.uri);
+      const formData = new FormData();
 
-      formData.append('frontId', frontBlob, 'front.jpg');
-      formData.append('backId', backBlob, 'back.jpg');
-      formData.append('selfie', selfieBlob, 'selfie.jpg');
+      // FRONT ID
+      formData.append('frontId', {
+        uri:
+          Platform.OS === 'web'
+            ? frontPhoto.uri
+            : frontPhoto.uri,
+        name: 'front.jpg',
+        type: 'image/jpeg',
+      });
 
-      const response = await fetch('https://your-api.com/verify', {
+      // BACK ID
+      formData.append('backId', {
+        uri:
+          Platform.OS === 'web'
+            ? backPhoto.uri
+            : backPhoto.uri,
+        name: 'back.jpg',
+        type: 'image/jpeg',
+      });
+
+      // SELFIE
+      formData.append('selfie', {
+        uri:
+          Platform.OS === 'web'
+            ? selfiePhoto.uri
+            : selfiePhoto.uri,
+        name: 'selfie.jpg',
+        type: 'image/jpeg',
+      });
+
+      // IMPORTANT:
+      // Replace with your Django server IP
+      const API_URL = 'http://192.168.1.5:8000/api/verify/';
+
+      const response = await fetch(API_URL, {
         method: 'POST',
         body: formData,
-        headers: { 'Content-Type': 'multipart/form-data' },
       });
 
       const data = await response.json();
 
-      switch (response.status) {
-        case 200:
-          setSubmitStatus('success');
-          break;
-        case 400:
-          setSubmitStatus('error');
-          setErrorMessage(data.message || 'Invalid request. Please check your images.');
-          break;
-        case 401:
-          setSubmitStatus('error');
-          setErrorMessage('Authentication failed. Please log in again.');
-          break;
-        case 422:
-          setSubmitStatus('error');
-          setErrorMessage(data.details || 'Image quality issues. Please retake photos with better lighting.');
-          break;
-        case 500:
-          setSubmitStatus('error');
-          setErrorMessage('Server error. Please try again later.');
-          break;
-        default:
-          setSubmitStatus('error');
-          setErrorMessage('An unexpected error occurred. Please try again.');
+      console.log('SERVER RESPONSE:', data);
+
+      if (response.ok) {
+        setSubmitStatus('success');
+      } else {
+        setSubmitStatus('error');
+
+        setErrorMessage(
+          data.message ||
+          data.error ||
+          'Verification failed'
+        );
       }
+
     } catch (error) {
-      console.error(error);
+      console.error('UPLOAD ERROR:', error);
+
       setSubmitStatus('error');
-      setErrorMessage('Network error. Check your internet connection and try again.');
+
+      setErrorMessage(
+        'Network error. Please check your internet connection.'
+      );
     }
   };
 
@@ -530,13 +635,17 @@ export default function DocumentScreen() {
               facing="front"
               overlayType="selfie"
               onCapture={handleSelfieCapture}
-              onCancel={() => handleCameraCancel('back')}
+              onCancel={() => handleCameraCancel('preview')}
               colors={colors}
             />
           )}
 
           {step === 'preview' && (
             <PreviewScreen
+              qualityErrors={qualityErrors}
+              qualityResults={qualityResults}
+              checkingQuality={checkingQuality}
+              onCheckQuality={checkImageQuality}
               colors={colors}
               frontPhoto={frontPhoto}
               backPhoto={backPhoto}
@@ -580,3 +689,115 @@ export default function DocumentScreen() {
     </View>
   );
 }
+
+/**************************************************************
+ * This frontend depends on TWO endpoints:
+ **************************************************************/
+
+/**
+ * ============================================================
+ * 1. POST /api/check-quality/
+ * ============================================================
+ *
+ * PURPOSE:
+ * Runs image quality checks for front ID, back ID, and selfie.
+ *
+ * USED BY:
+ * DocumentScreen → checkImageQuality()
+ * PreviewScreen → qualityResults prop
+ *
+ * ------------------------------------------------------------
+ * REQUEST:
+ * multipart/form-data
+ *
+ * Fields:
+ * - frontId: File (image/jpeg)
+ * - backId: File (image/jpeg)
+ * - selfie: File (image/jpeg)
+ *
+ * ------------------------------------------------------------
+ * RESPONSE (STRICT FORMAT REQUIRED):
+ *
+ * {
+ *   "front": {
+ *     "valid": boolean,
+ *     "message": string,
+ *     "checks": {
+ *       "blur": boolean,
+ *       "glare": boolean,
+ *       "cropped": boolean,
+ *       "readable": boolean
+ *     }
+ *   },
+ *   "back": {
+ *     "valid": boolean,
+ *     "message": string,
+ *     "checks": {
+ *       "blur": boolean,
+ *       "glare": boolean,
+ *       "cropped": boolean,
+ *       "readable": boolean
+ *     }
+ *   },
+ *   "selfie": {
+ *     "valid": boolean,
+ *     "message": string,
+ *     "checks": {
+ *       "face_visible": boolean,
+ *       "lighting": boolean,
+ *       "occlusion": boolean
+ *     }
+ *   }
+ * }
+ *
+ * ------------------------------------------------------------
+ * RULES:
+ * - All 3 keys (front, back, selfie) MUST always exist
+ * - valid MUST be boolean (NOT string)
+ * - checks MUST always be an object (never null/undefined)
+ * - message MUST always be present
+ */
+
+
+/**
+ * ============================================================
+ * 2. POST /api/verify/
+ * ============================================================
+ *
+ * PURPOSE:
+ * Final KYC submission after quality check passes.
+ *
+ * USED BY:
+ * DocumentScreen → submitVerification()
+ *
+ * ------------------------------------------------------------
+ * REQUEST:
+ * multipart/form-data
+ *
+ * Fields:
+ * - frontId: File (image/jpeg)
+ * - backId: File (image/jpeg)
+ * - selfie: File (image/jpeg)
+ *
+ * ------------------------------------------------------------
+ * RESPONSE:
+ *
+ * SUCCESS:
+ * {
+ *   "success": true,
+ *   "message": string
+ * }
+ *
+ * FAILURE:
+ * {
+ *   "success": false,
+ *   "message": string,
+ *   "error": string (optional)
+ * }
+ *
+ * ------------------------------------------------------------
+ * RULES:
+ * - Always return JSON
+ * - Always include message
+ * - Use HTTP 200–499 properly (don’t rely only on message)
+ */
